@@ -37,12 +37,26 @@ use constant true => 1;
 my $g_debug = false; 
 my %g_gucs;
 my %g_gucs_src;
+my $g_page_size = 8192;
+my $g_wal_segment_size = 2048;
+my $g_wal_segment = sizePretty(8192*2048);
+
+# Settings that map onto obsolete settings
+#                 <new_setting>                                <old_setting> <pretty modifier> <pretty units> <internal modifier>
+my %g_gucs_map = (max_wal_size                            => [ split(' ', "checkpoint_segments *$g_wal_segment *1")   ]);
+
+# Obsolete settings , last version present and successor
+my %g_gucs_obs = (max_fsm_pages                           => [ qw(8.3)                         ], 
+                  max_fsm_relations                       => [ qw(8.3)                         ], 
+                  ssl_renegotiation_limit                 => [ qw(9.3)                         ], 
+                  checkpoint_segments                     => [ qw(9.3 max_wal_size)             ]);
+
 my $g_non_default_count = 0;
 my $g_change_count = 0;
 my $g_usage = 'pg_upgrade_conf.pl { -f <path> [ -a <path> ] | -c <conninfo> } { -F <path> | -C <conninfo> }
 
 -f --old_file           Path to the old configuration file to read settings from
--a --old_auto_file      Path to the old auto configuration file to read settings set vial ALTER SYSTEM from
+-a --old_auto_file      Path to the old auto configuration file to read settings set via ALTER SYSTEM from
 -c --old_conninfo       Conninfo of the old server to read settings from
 -F --new_file           Path to the new configuration file to alter
 -C --new_conninfo       Conninfo of the new server to apply settings via ALTER SYSTEM';
@@ -187,11 +201,17 @@ sub modifyNewFile {
                 if ($g_debug) { 
                     print "DEBUG: Target file key = $key value = $value\n";
                 }
+                if (!exists($g_gucs{$key}) && exists($g_gucs_map{$key})) {
+                    $g_gucs{$key} = eval($g_gucs{$g_gucs_map{$key}[0]} . $g_gucs_map{$key}[1]) . (defined($g_gucs_map{$key}[2])?"$g_gucs_map{$key}[2]":"");
+                    $g_gucs_src{$key} .=  "(mapped from $g_gucs_map{$key}[0] = $g_gucs{$g_gucs_map{$key}[0]})";
+                    push(@lines, "# $g_gucs_map{$key}[0]  =  $g_gucs{$g_gucs_map{$key}[0]}    # Obsoleted by $key as of pg $g_gucs_obs{$g_gucs_map{$key}[0]}[0] by $key = $g_gucs_map{$key}[0]$g_gucs_map{$key}[1] $g_gucs_map{$key}[2]");
+                    $g_gucs{$g_gucs_map{$key}[0]} = '[written]';
+		}
                 if (exists($g_gucs{$key})) {
                     if (($_ !~ /^#/) && ($value eq $g_gucs{$key})) {
                             $setting++;
                             # Setting is already present and not commented out/default
-                            print "$setting) Not setting $key : already the values are already the same $value = $g_gucs{$key}\n";
+                            print "$setting) Not setting $key : the values are already the same $value = $g_gucs{$key}\n";
                             $g_gucs{$key} = '[written]';
                     }
                     else { 
@@ -201,7 +221,7 @@ sub modifyNewFile {
                         }
                         push(@lines, $_);
                         $pushed = true;
-                        if ($g_gucs{$key} ne '[written]') {
+                        if ($g_gucs{$key} ne '[written]'){
                             $setting++;
                             print "$setting) Setting $key to $g_gucs{$key} : was " . (($comment)?"commented out / set to default":"set to") . " $value\n";
                             push(@lines, $key . ' = ' . $g_gucs{$key});
@@ -217,7 +237,6 @@ sub modifyNewFile {
         }
         close(NEWFILE);
 
-
         foreach $key (keys %g_gucs) {
             if ($g_gucs{$key} ne '[written]') {
                 $not_written = true;
@@ -228,13 +247,19 @@ sub modifyNewFile {
         if ($not_written) {
             push(@lines, '');
             push(@lines, '#' . '-'x78);
-            push(@lines, '# Unmatched settings written by pg_upgrade_conf.pl');
+            push(@lines, '# Unmatched settings written by pg_upgrade_conf.pl on ' . currentTimestamp());
             push(@lines, '#' . '-'x78);
             foreach $key (keys %g_gucs) {
                 if ($g_gucs{$key} ne '[written]') {
                     $setting++;
-                    print "$setting) No place holder for setting $key : adding $key = $g_gucs{$key}\n";
-                    push(@lines, $key . ' = ' . $g_gucs{$key});
+                    if (exists($g_gucs_obs{$key})) {
+                        print "$setting) No place holder for setting $key : obsolete as of pg $g_gucs_obs{$key}[0] adding commented setting # $key = $g_gucs{$key}\n";
+                        push(@lines, "# $key = $g_gucs{$key}    # Obsolete as of pg $g_gucs_obs{$key}[0]");
+                    }
+                    else {
+                        print "$setting) No place holder for setting $key : adding setting $key = $g_gucs{$key}\n";
+                        push(@lines, "$key = $g_gucs{$key}");
+                    }
                 }
             }
         }
@@ -286,24 +311,48 @@ sub modifyNewConninfo {
         }
 
         foreach $key (keys %g_gucs) {
+	    my $set_key;
+            my $set_val;
+            my $msg1;
+            my $msg2;
+
             $setting++;
+            if (exists($g_gucs_obs{$key}) && (substr($version,0,3) > $g_gucs_obs{$key}[0])) {
+                if (defined($g_gucs_obs{$key}[1])) {
+                    $set_key = $g_gucs_obs{$key}[1];
+                    $set_val = eval($g_gucs{$g_gucs_map{$set_key}[0]} . $g_gucs_map{$set_key}[3]);
+                    $msg1 = "$g_gucs_obs{$key}[1] (replaces $key after pg $g_gucs_obs{$key}[0])";
+                    $msg2 = "$set_val (instead of $key = $g_gucs{$key})\n";
+                }
+                else {
+                    print "$setting) Not setting $key : Setting obsolete after pg $g_gucs_obs{$key}[0] : would have been $key = $g_gucs{$key}\n";
+                    next;
+                }
+            }
+            else {
+                $set_key = $key;
+                $set_val = $g_gucs{$key};
+                $msg1 = $set_key;  
+                $msg2 = $g_gucs{$key};
+            }
+
             $query = "SELECT CASE vartype WHEN 'string' THEN quote_literal(reset_val) ELSE reset_val END 
                     FROM pg_catalog.pg_settings WHERE lower(name) = lower(?)";
             $sth = $dbh->prepare($query);
-            $sth->bind_param(1, $key);
+            $sth->bind_param(1, $set_key);
             $sth->execute();
             $value = $sth->fetchrow;
             if ($g_debug) {
-                print "$setting) KEY: $key SVAL: $value VAL: $g_gucs{$key}\n";
+                print "$setting) KEY: $set_key SVAL: $value VAL: $set_val\n";
             }
-            if ($value eq $g_gucs{$key}) {
-                print "$setting) Not setting $key : already the values are already the same $value = $g_gucs{$key}\n";
+            if ($value eq $set_val) {
+                print "$setting) Not setting $msg1 : the values are already the same $value = $set_val\n";
             }
             else {
-                print "$setting) Setting $key to $g_gucs{$key} : was set to $value\n";
-                $query = "ALTER SYSTEM SET " . qtrim($key) . " TO ?";
+                print "$setting) Setting $msg1 to $set_val : was set to $value\n";
+                $query = "ALTER SYSTEM SET " . qtrim($set_key) . " TO ?";
                 $sth = $dbh->prepare($query);
-                $sth->bind_param(1, qtrim($g_gucs{$key}));
+                $sth->bind_param(1, qtrim($set_val));
                 $sth->execute();
                 $change_count++;
             }
@@ -329,4 +378,21 @@ sub qtrim {
     $string =~ s/^('|")+//;
     $string =~ s/('|")+$//;
     return $string;
+}
+
+sub currentTimestamp{
+    my $timestamp;
+    my ($year, $month, $day, $hour, $min, $sec);
+    ($year, $month, $day, $hour, $min, $sec) = (localtime(time))[5,4,3,2,1,0];
+    $timestamp = sprintf ("%02d/%02d/%04d %02d:%02d:%02d", $day, $month+1, $year+1900, $hour, $min, $sec);
+    return $timestamp;
+}
+
+sub sizePretty {
+    my $size = shift;
+    foreach ('B','KB','MB','GB','TB','PB')
+    {
+        return sprintf("%.2f",$size)." $_" if $size < 1024;
+        $size /= 1024;
+    }
 }
