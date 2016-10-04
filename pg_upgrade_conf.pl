@@ -39,7 +39,7 @@ my %g_gucs;
 my %g_gucs_src;
 my $g_page_size = 8192;
 my $g_wal_segment_size = 2048;
-my $g_wal_segment = sizePretty(8192*2048);
+my $g_wal_segment = sizePretty($g_page_size*$g_wal_segment_size);
 
 # Settings that map onto obsolete settings
 #                 <new_setting>                                <old_setting> <pretty modifier> <pretty units> <internal modifier>
