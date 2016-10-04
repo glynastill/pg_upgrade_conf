@@ -201,7 +201,7 @@ sub modifyNewFile {
                 if ($g_debug) { 
                     print "DEBUG: Target file key = $key value = $value\n";
                 }
-                if (!exists($g_gucs{$key}) && exists($g_gucs_map{$key})) {
+                if (!exists($g_gucs{$key}) && exists($g_gucs_map{$key}) && exists($g_gucs{$g_gucs_map{$key}[0]})) {
                     $g_gucs{$key} = eval($g_gucs{$g_gucs_map{$key}[0]} . $g_gucs_map{$key}[1]) . (defined($g_gucs_map{$key}[2])?"$g_gucs_map{$key}[2]":"");
                     $g_gucs_src{$key} .=  "(mapped from $g_gucs_map{$key}[0] = $g_gucs{$g_gucs_map{$key}[0]})";
                     push(@lines, "# $g_gucs_map{$key}[0]  =  $g_gucs{$g_gucs_map{$key}[0]}    # Obsoleted by $key as of pg $g_gucs_obs{$g_gucs_map{$key}[0]}[0] by $key = $g_gucs_map{$key}[0]$g_gucs_map{$key}[1] $g_gucs_map{$key}[2]");
