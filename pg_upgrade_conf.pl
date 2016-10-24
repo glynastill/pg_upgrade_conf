@@ -49,7 +49,7 @@ my %g_gucs_map = (max_wal_size                            => [ split(' ', "check
 my %g_gucs_obs = (max_fsm_pages                           => [ qw(8.3)                         ], 
                   max_fsm_relations                       => [ qw(8.3)                         ], 
                   ssl_renegotiation_limit                 => [ qw(9.3)                         ], 
-                  checkpoint_segments                     => [ qw(9.3 max_wal_size)             ]);
+                  checkpoint_segments                     => [ qw(9.5 max_wal_size)            ]);
 
 my $g_non_default_count = 0;
 my $g_change_count = 0;
